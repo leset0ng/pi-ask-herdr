@@ -3,6 +3,18 @@
 A Pi extension that adds an `askuser` tool, with optional integration with
 [Herdr](https://herdr.dev) notifications and agent state.
 
+## Structure
+
+```text
+index.ts      # Pi auto-discovery entry point
+src/
+  tool.ts     # Tool registration and parameter schema
+  ui.ts       # TUI prompts (text, confirm, select, multiselect)
+  herdr.ts    # Herdr socket / event-bus integration
+  options.ts  # Option normalization and display formatting
+  types.ts    # Shared TypeScript types
+```
+
 ## What it does
 
 - Registers an `askuser` tool that can ask the user for:

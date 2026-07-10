@@ -1,5 +1,5 @@
 {
-  "name": "askuser-herdr",
+  "name": "pi-ask-herdr",
   "version": "0.1.0",
   "description": "Pi extension that adds an askuser tool and integrates with Herdr notifications/agent state.",
   "private": true,

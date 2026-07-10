@@ -1,4 +1,4 @@
-# askuser-herdr
+# pi-ask-herdr
 
 A Pi extension that adds an `askuser` tool, with optional integration with
 [Herdr](https://herdr.dev) notifications and agent state.
@@ -21,16 +21,16 @@ Copy or clone this directory into Pi's extensions folder:
 
 ```bash
 # Global
-cp -R askuser-herdr ~/.pi/agent/extensions/
+cp -R pi-ask-herdr ~/.pi/agent/extensions/
 
 # Or project-local
-cp -R askuser-herdr .pi/extensions/
+cp -R pi-ask-herdr .pi/extensions/
 ```
 
 Then reload Pi with `/reload`, or test it directly with:
 
 ```bash
-pi -e ~/.pi/agent/extensions/askuser-herdr/index.ts
+pi -e ~/.pi/agent/extensions/pi-ask-herdr/index.ts
 ```
 
 ## Tool usage

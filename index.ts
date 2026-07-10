@@ -1,5 +1,5 @@
 /**
- * askuser-herdr
+ * pi-ask-herdr
  *
  * A Pi extension that adds an `askuser` tool so the agent can ask the user
  * for input when it needs a decision to proceed.
@@ -140,7 +140,7 @@ async function herdrReportAgent(state: "blocked" | "working" | "idle", message?:
 		await herdrRequest<{ type: string }>("pane.report_agent", params);
 	} catch (err) {
 		// Non-fatal: Herdr state reporting is best-effort.
-		console.error("[askuser-herdr] report_agent failed:", err);
+		console.error("[pi-ask-herdr] report_agent failed:", err);
 	}
 }
 
@@ -152,7 +152,7 @@ async function herdrNotify(title: string, body: string) {
 			sound: "request",
 		});
 	} catch (err) {
-		console.error("[askuser-herdr] notification.show failed:", err);
+		console.error("[pi-ask-herdr] notification.show failed:", err);
 	}
 }
 

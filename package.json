@@ -1,0 +1,23 @@
+{
+  "name": "askuser-herdr",
+  "version": "0.1.0",
+  "description": "Pi extension that adds an askuser tool and integrates with Herdr notifications/agent state.",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

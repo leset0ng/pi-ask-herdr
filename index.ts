@@ -28,19 +28,31 @@ import { createConnection } from "node:net";
 
 type AskType = "text" | "confirm" | "select" | "multiselect";
 
+interface OptionObject {
+	label: string;
+	description?: string;
+}
+
 interface AskParams {
 	question: string;
 	type?: AskType;
-	options?: string[];
+	options?: (string | OptionObject)[];
 	default?: string;
 	timeout?: number;
 	allow_custom?: boolean;
 }
 
+interface NormalizedOption {
+	label: string;
+	value: string;
+	display: string;
+	description?: string;
+}
+
 interface AskDetails {
 	question: string;
 	type: AskType;
-	options: string[] | undefined;
+	options: (string | OptionObject)[] | undefined;
 	answer: string | boolean | string[] | null;
 	cancelled: boolean;
 	custom?: boolean;
@@ -49,6 +61,16 @@ interface AskDetails {
 // Sentinel value used internally for the "Other (custom)" menu item.
 const CUSTOM_SENTINEL = "__askuser_custom__";
 const CUSTOM_LABEL = "✎ Other (custom)";
+
+function normalizeOptions(options: (string | OptionObject)[]): NormalizedOption[] {
+	return options.map((opt) => {
+		if (typeof opt === "string") {
+			return { label: opt, value: opt, display: opt };
+		}
+		const display = opt.description ? `${opt.label} — ${opt.description}` : opt.label;
+		return { label: opt.label, value: opt.label, display, description: opt.description };
+	});
+}
 
 // ---------------------------------------------------------------------------
 // Herdr integration helpers
@@ -214,26 +236,27 @@ async function askConfirm(params: AskParams, ctx: ExtensionContext): Promise<Ask
 }
 
 async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
-	const options = params.options ?? [];
-	if (options.length === 0) {
+	const rawOptions = params.options ?? [];
+	if (rawOptions.length === 0) {
 		ctx.ui.notify("askuser: select requires options", "error");
 		return {
 			question: params.question,
 			type: "select",
-			options,
+			options: rawOptions,
 			answer: null,
 			cancelled: true,
 		};
 	}
 
-	const displayOptions = [...options, CUSTOM_LABEL];
+	const normalized = normalizeOptions(rawOptions);
+	const displayOptions = [...normalized.map((o) => o.display), CUSTOM_LABEL];
 	const choice = await ctx.ui.select(params.question, displayOptions);
 
 	if (choice === null) {
 		return {
 			question: params.question,
 			type: "select",
-			options,
+			options: rawOptions,
 			answer: null,
 			cancelled: true,
 		};
@@ -244,18 +267,19 @@ async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskD
 		return {
 			question: params.question,
 			type: "select",
-			options,
+			options: rawOptions,
 			answer: text ?? null,
 			cancelled: text === null,
 			custom: true,
 		};
 	}
 
+	const picked = normalized.find((o) => o.display === choice);
 	return {
 		question: params.question,
 		type: "select",
-		options,
-		answer: choice,
+		options: rawOptions,
+		answer: picked?.value ?? choice,
 		cancelled: false,
 	};
 }
@@ -273,14 +297,15 @@ async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise
 		};
 	}
 
-	const optionValues = [...rawOptions];
+	const normalized = normalizeOptions(rawOptions);
+	const optionItems = [...normalized];
 	const selected = new Set<string>();
 
 	while (true) {
 		const displayOptions: string[] = ["✓ Done", "✗ Cancel", CUSTOM_LABEL];
-		for (const value of optionValues) {
-			const prefix = selected.has(value) ? "[x]" : "[ ]";
-			displayOptions.push(`${prefix} ${value}`);
+		for (const item of optionItems) {
+			const prefix = selected.has(item.value) ? "[x]" : "[ ]";
+			displayOptions.push(`${prefix} ${item.display}`);
 		}
 
 		const choice = await ctx.ui.select(params.question, displayOptions);
@@ -307,17 +332,19 @@ async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise
 
 		if (choice === CUSTOM_LABEL) {
 			const text = await ctx.ui.input("Enter a custom value to add:");
-			if (text && !optionValues.includes(text)) {
-				optionValues.push(text);
-				selected.add(text);
-			} else if (text) {
+			if (text) {
+				if (!optionItems.some((i) => i.value === text)) {
+					optionItems.push({ label: text, value: text, display: text });
+				}
 				selected.add(text);
 			}
 			continue;
 		}
 
 		// Toggle a regular option.
-		const value = choice.replace(/^\[[x ]\] /, "");
+		const display = choice.replace(/^\[[x ]\] /, "");
+		const item = optionItems.find((i) => i.display === display);
+		const value = item?.value ?? display;
 		if (selected.has(value)) {
 			selected.delete(value);
 		} else {
@@ -374,6 +401,11 @@ function renderAnswer(details: AskDetails): string {
 // ---------------------------------------------------------------------------
 
 export default function askuserHerdr(pi: ExtensionAPI) {
+	const OptionSchema = Type.Object({
+		label: Type.String({ description: "Display label and returned value" }),
+		description: Type.Optional(Type.String({ description: "Optional longer description shown in the menu" })),
+	});
+
 	const AskParamsSchema = Type.Object({
 		question: Type.String({ description: "The question to ask the user" }),
 		type: Type.Optional(
@@ -382,7 +414,9 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 			}),
 		),
 		options: Type.Optional(
-			Type.Array(Type.String(), { description: "Required when type is select or multiselect" }),
+			Type.Array(Type.Union([Type.String(), OptionSchema]), {
+				description: "Required when type is select or multiselect; items can be strings or {label, description?}",
+			}),
 		),
 		default: Type.Optional(Type.String({ description: "Default value for text input" })),
 		timeout: Type.Optional(
@@ -407,6 +441,7 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 			"For askuser with type 'select' or 'multiselect', always provide the options array.",
 			"Keep the question concise but include enough context for the user to answer.",
 			"Users can always choose 'Other (custom)' for select/multiselect to type their own answer.",
+			"Use { label, description } objects for options when the user needs extra context to decide.",
 		],
 		parameters: AskParamsSchema,
 		executionMode: "sequential",

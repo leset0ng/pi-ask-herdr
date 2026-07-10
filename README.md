@@ -41,6 +41,8 @@ pi -e ~/.pi/agent/extensions/pi-ask-herdr/index.ts
 
 ## Tool usage
 
+Simple string options:
+
 ```json
 {
   "question": "Which database should we use?",
@@ -49,16 +51,30 @@ pi -e ~/.pi/agent/extensions/pi-ask-herdr/index.ts
 }
 ```
 
+Options with descriptions:
+
+```json
+{
+  "question": "Which database should we use?",
+  "type": "select",
+  "options": [
+    { "label": "PostgreSQL", "description": "Full-featured relational database" },
+    { "label": "SQLite", "description": "Zero-config file database" },
+    { "label": "MySQL", "description": "Widely used open-source RDBMS" }
+  ]
+}
+```
+
 ### Parameters
 
-| Name      | Type     | Required | Description                                      |
-|-----------|----------|----------|--------------------------------------------------|
-| question  | string   | yes      | The question to display                          |
-| type         | string   | no       | `"text"`, `"confirm"`, `"select"`, `"multiselect"` (default: text) |
-| options      | string[] | no       | Required when `type` is `select` or `multiselect`            |
-| default      | string   | no       | Prefilled value for text input                               |
-| timeout      | number   | no       | Auto-cancel after N milliseconds                             |
-| allow_custom | boolean  | no       | For `confirm`: also offer "Other (custom)"                   |
+| Name         | Type                 | Required | Description                                      |
+|--------------|----------------------|----------|--------------------------------------------------|
+| question     | string               | yes      | The question to display                          |
+| type         | string               | no       | `"text"`, `"confirm"`, `"select"`, `"multiselect"` (default: text) |
+| options      | string[] or object[] | no       | Required when `type` is `select` or `multiselect`. Each item can be a string or `{ "label": string, "description"?: string }` |
+| default      | string               | no       | Prefilled value for text input                               |
+| timeout      | number               | no       | Auto-cancel after N milliseconds                             |
+| allow_custom | boolean              | no       | For `confirm`: also offer "Other (custom)"                   |
 
 ## Herdr integration
 
@@ -69,11 +85,12 @@ into its panes:
 - `HERDR_SOCKET_PATH`
 - `HERDR_PANE_ID`
 
-If these are present, the extension calls:
+If these are present, the extension:
 
-- `pane.report_agent` with state `blocked` before prompting
-- `notification.show` with the question as the body
-- `pane.report_agent` with state `working` (or `idle` if cancelled) afterwards
+- emits `herdr:blocked` with `active: true` before prompting (the official
+  Herdr Pi integration turns this into a `blocked` pane state)
+- calls `notification.show` with the question as the body
+- emits `herdr:blocked` with `active: false` after the user answers
 
 No extra configuration is required.
 

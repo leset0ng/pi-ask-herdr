@@ -328,17 +328,4 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 		},
 	});
 
-	// Optional manual command so users can trigger the same prompt flow.
-	pi.registerCommand("askuser", {
-		description: "Manually trigger an askuser prompt (question only)",
-		handler: async (args, ctx) => {
-			if (ctx.mode !== "tui") {
-				ctx.ui.notify("askuser requires interactive mode", "error");
-				return;
-			}
-			const question = args.trim() || "Please enter a value:";
-			const details = await askInTui({ question, type: "text" }, ctx);
-			ctx.ui.notify(renderAnswer(details), details.cancelled ? "warning" : "info");
-		},
-	});
 }

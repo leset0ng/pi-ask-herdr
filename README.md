@@ -10,6 +10,7 @@ A Pi extension that adds an `askuser` tool, with optional integration with
   - yes/no confirmation (`type: "confirm"`)
   - single choice from a list (`type: "select"`)
 - Waits for the answer and returns it to the agent.
+- No extra slash command is registered — only the `askuser` tool.
 - When Pi runs inside a Herdr pane, it:
   - reports the pane state as `blocked` while waiting
   - sends a Herdr toast notification so the user knows input is needed

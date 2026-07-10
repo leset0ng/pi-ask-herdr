@@ -1,6 +1,6 @@
 # pi-ask-herdr
 
-A Pi extension that adds an `askuser` tool, with optional integration with
+A Pi extension that adds an `ask_user` tool, with optional integration with
 [Herdr](https://herdr.dev) notifications and agent state.
 
 ## Structure
@@ -17,7 +17,7 @@ src/
 
 ## What it does
 
-- Registers an `askuser` tool that can ask the user for:
+- Registers an `ask_user` tool that can ask the user for:
   - free-form text (`type: "text"`)
   - yes/no confirmation (`type: "confirm"`)
   - single choice from a list (`type: "select"`)
@@ -27,7 +27,7 @@ src/
   available so the user can type their own answer.
 - For `confirm`, you can enable the same custom option with
   `"allow_custom": true`.
-- No extra slash command is registered — only the `askuser` tool.
+- No extra slash command is registered — only the `ask_user` tool.
 - When Pi runs inside a Herdr pane, it:
   - reports the pane state as `blocked` while waiting
   - sends a Herdr toast notification so the user knows input is needed

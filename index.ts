@@ -1,7 +1,7 @@
 /**
  * pi-ask-herdr
  *
- * A Pi extension that adds an `askuser` tool and integrates with Herdr.
+ * A Pi extension that adds an `ask_user` tool and integrates with Herdr.
  *
  * Source modules live under `./src/`; this file is only the auto-discovered
  * entry point that Pi loads.

@@ -1,5 +1,5 @@
 /**
- * Tool registration for askuser.
+ * Tool registration for ask_user.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -40,14 +40,14 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "askuser",
+		name: "ask_user",
 		label: "Ask User",
 		description:
 			"Ask the user a question and wait for an answer. Use when you need user input to continue.",
 		promptSnippet: "Prompt the user for input when the next step depends on a choice or missing detail.",
 		promptGuidelines: [
-			"Use askuser only when the task cannot proceed without user input.",
-			"For askuser with type 'select' or 'multiselect', always provide the options array.",
+			"Use ask_user only when the task cannot proceed without user input.",
+			"For ask_user with type 'select' or 'multiselect', always provide the options array.",
 			"Keep the question concise but include enough context for the user to answer.",
 			"Users can always choose 'Other (custom)' for select/multiselect to type their own answer.",
 			"Use { label, description } objects for options when the user needs extra context to decide.",
@@ -62,7 +62,7 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "askuser can only be used in interactive TUI mode.",
+							text: "ask_user can only be used in interactive TUI mode.",
 						},
 					],
 					details: {
@@ -84,7 +84,7 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `askuser error: type '${params.type}' requires an options array.`,
+							text: `ask_user error: type '${params.type}' requires an options array.`,
 						},
 					],
 					details: {
@@ -99,7 +99,7 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 
 			// Tell Herdr that this pane is blocked waiting for input.
 			if (isHerdrEnv()) {
-				setHerdrBlocked(pi, true, "askuser");
+				setHerdrBlocked(pi, true, "ask_user");
 				await herdrNotify("Pi needs input", params.question);
 			}
 

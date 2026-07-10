@@ -1,5 +1,5 @@
 /**
- * TUI prompting implementation for the askuser tool.
+ * TUI prompting implementation for the ask_user tool.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -78,7 +78,7 @@ async function askConfirm(params: AskParams, ctx: ExtensionContext): Promise<Ask
 async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
 	const rawOptions = params.options ?? [];
 	if (rawOptions.length === 0) {
-		ctx.ui.notify("askuser: select requires options", "error");
+		ctx.ui.notify("ask_user: select requires options", "error");
 		return {
 			question: params.question,
 			type: "select",
@@ -131,7 +131,7 @@ async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskD
 async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
 	const rawOptions = params.options ?? [];
 	if (rawOptions.length === 0) {
-		ctx.ui.notify("askuser: multiselect requires options", "error");
+		ctx.ui.notify("ask_user: multiselect requires options", "error");
 		return {
 			question: params.question,
 			type: "multiselect",

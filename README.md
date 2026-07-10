@@ -67,19 +67,6 @@ Then reload Pi with `/reload`, or test it directly with:
 pi -e ~/.pi/agent/extensions/pi-ask-herdr/index.ts
 ```
 
-## Pi package index / gallery
-
-This package is tagged with the `pi-package` keyword, which makes it
-_discoverable_ by Pi's package gallery at <https://pi.dev/packages>.
-However, Pi does not have a single curated "official" index that auto-approves
-every upload. Being on npm with the `pi-package` keyword means:
-
-- `pi install npm:pi-ask-herdr` works immediately.
-- It may appear in the gallery if/when Pi's gallery aggregates that keyword.
-
-It is **not** an officially endorsed or reviewed Pi package unless listed as
-such by the Pi maintainers.
-
 ## Tool usage
 
 Simple string options:

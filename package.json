@@ -2,9 +2,30 @@
   "name": "pi-ask-herdr",
   "version": "0.1.0",
   "description": "Pi extension that adds an ask_user tool and integrates with Herdr notifications/agent state.",
-  "private": true,
   "type": "module",
   "main": "./index.ts",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "herdr",
+    "ask-user"
+  ],
+  "homepage": "https://github.com/leset0ng/pi-ask-herdr#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leset0ng/pi-ask-herdr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leset0ng/pi-ask-herdr/issues"
+  },
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src/**/*",
+    "README.md",
+    "package.json"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
@@ -18,6 +39,8 @@
     "typescript": "^5.0.0"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

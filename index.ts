@@ -4,10 +4,17 @@
  * A Pi extension that adds an `askuser` tool so the agent can ask the user
  * for input when it needs a decision to proceed.
  *
- * When Pi is running inside a Herdr pane, the extension also:
+ * When Pi runs inside a Herdr pane, the extension also:
  *   - reports the pane agent state as `blocked` while waiting for an answer
+ *     via the official Herdr Pi integration event bus (`herdr:blocked`)
  *   - sends a Herdr toast notification so the user knows input is needed
  *   - restores the agent state after the user answers
+ *
+ * Supported prompt types:
+ *   - text       free-form text input
+ *   - confirm    yes / no (with optional "Other (custom)" explain option)
+ *   - select     single choice, always offers "Other (custom)" fallback
+ *   - multiselect multiple choices, always offers "Other (custom)" fallback
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -19,7 +26,7 @@ import { createConnection } from "node:net";
 // Types
 // ---------------------------------------------------------------------------
 
-type AskType = "text" | "confirm" | "select";
+type AskType = "text" | "confirm" | "select" | "multiselect";
 
 interface AskParams {
 	question: string;
@@ -27,24 +34,21 @@ interface AskParams {
 	options?: string[];
 	default?: string;
 	timeout?: number;
+	allow_custom?: boolean;
 }
 
 interface AskDetails {
 	question: string;
 	type: AskType;
 	options: string[] | undefined;
-	answer: string | boolean | null;
+	answer: string | boolean | string[] | null;
 	cancelled: boolean;
+	custom?: boolean;
 }
 
-interface HerdrReport {
-	pane_id: string;
-	source: string;
-	agent: string;
-	state: "blocked" | "working" | "idle";
-	message?: string;
-	custom_status?: string;
-}
+// Sentinel value used internally for the "Other (custom)" menu item.
+const CUSTOM_SENTINEL = "__askuser_custom__";
+const CUSTOM_LABEL = "✎ Other (custom)";
 
 // ---------------------------------------------------------------------------
 // Herdr integration helpers
@@ -56,10 +60,6 @@ function isHerdrEnv(): boolean {
 
 function herdrSocketPath(): string | undefined {
 	return process.env.HERDR_SOCKET_PATH;
-}
-
-function herdrPaneId(): string | undefined {
-	return process.env.HERDR_PANE_ID;
 }
 
 /**
@@ -121,29 +121,6 @@ function herdrRequest<T>(method: string, params: object): Promise<T | undefined>
 	});
 }
 
-async function herdrReportAgent(state: "blocked" | "working" | "idle", message?: string) {
-	const paneId = herdrPaneId();
-	if (!paneId) return;
-
-	const params: HerdrReport = {
-		pane_id: paneId,
-		source: "pi:askuser",
-		agent: "pi",
-		state,
-		message,
-	};
-	if (state === "blocked") {
-		params.custom_status = "askuser";
-	}
-
-	try {
-		await herdrRequest<{ type: string }>("pane.report_agent", params);
-	} catch (err) {
-		// Non-fatal: Herdr state reporting is best-effort.
-		console.error("[pi-ask-herdr] report_agent failed:", err);
-	}
-}
-
 async function herdrNotify(title: string, body: string) {
 	try {
 		await herdrRequest<{ type: string; shown: boolean; reason?: string }>("notification.show", {
@@ -156,6 +133,14 @@ async function herdrNotify(title: string, body: string) {
 	}
 }
 
+function setHerdrBlocked(pi: ExtensionAPI, active: boolean, label?: string) {
+	try {
+		pi.events.emit("herdr:blocked", { active, label });
+	} catch (err) {
+		console.error("[pi-ask-herdr] failed to emit herdr:blocked:", err);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // UI helpers
 // ---------------------------------------------------------------------------
@@ -165,6 +150,180 @@ function makeSignal(timeout?: number): AbortSignal | undefined {
 	const controller = new AbortController();
 	setTimeout(() => controller.abort(), timeout);
 	return controller.signal;
+}
+
+async function askText(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
+	const signal = makeSignal(params.timeout);
+	const text = await ctx.ui.input(params.question, params.default ?? "", signal ? { signal } : undefined);
+	return {
+		question: params.question,
+		type: "text",
+		options: undefined,
+		answer: text ?? null,
+		cancelled: text === null,
+	};
+}
+
+async function askConfirm(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
+	const signal = makeSignal(params.timeout);
+	const allowCustom = params.allow_custom ?? false;
+
+	if (!allowCustom) {
+		const ok = await ctx.ui.confirm(params.question, undefined, signal ? { signal } : undefined);
+		return {
+			question: params.question,
+			type: "confirm",
+			options: undefined,
+			answer: ok === null ? null : ok,
+			cancelled: ok === null,
+		};
+	}
+
+	const options = ["Yes", "No", CUSTOM_LABEL];
+	const choice = await ctx.ui.select(params.question, options, signal ? { signal } : undefined);
+
+	if (choice === null) {
+		return {
+			question: params.question,
+			type: "confirm",
+			options: undefined,
+			answer: null,
+			cancelled: true,
+		};
+	}
+
+	if (choice === CUSTOM_LABEL) {
+		const text = await ctx.ui.input("Please explain your choice:");
+		return {
+			question: params.question,
+			type: "confirm",
+			options: undefined,
+			answer: text ?? null,
+			cancelled: text === null,
+			custom: true,
+		};
+	}
+
+	return {
+		question: params.question,
+		type: "confirm",
+		options: undefined,
+		answer: choice === "Yes",
+		cancelled: false,
+	};
+}
+
+async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
+	const options = params.options ?? [];
+	if (options.length === 0) {
+		ctx.ui.notify("askuser: select requires options", "error");
+		return {
+			question: params.question,
+			type: "select",
+			options,
+			answer: null,
+			cancelled: true,
+		};
+	}
+
+	const displayOptions = [...options, CUSTOM_LABEL];
+	const choice = await ctx.ui.select(params.question, displayOptions);
+
+	if (choice === null) {
+		return {
+			question: params.question,
+			type: "select",
+			options,
+			answer: null,
+			cancelled: true,
+		};
+	}
+
+	if (choice === CUSTOM_LABEL) {
+		const text = await ctx.ui.input("Enter your custom answer:");
+		return {
+			question: params.question,
+			type: "select",
+			options,
+			answer: text ?? null,
+			cancelled: text === null,
+			custom: true,
+		};
+	}
+
+	return {
+		question: params.question,
+		type: "select",
+		options,
+		answer: choice,
+		cancelled: false,
+	};
+}
+
+async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
+	const rawOptions = params.options ?? [];
+	if (rawOptions.length === 0) {
+		ctx.ui.notify("askuser: multiselect requires options", "error");
+		return {
+			question: params.question,
+			type: "multiselect",
+			options: rawOptions,
+			answer: null,
+			cancelled: true,
+		};
+	}
+
+	const optionValues = [...rawOptions];
+	const selected = new Set<string>();
+
+	while (true) {
+		const displayOptions: string[] = ["✓ Done", "✗ Cancel", CUSTOM_LABEL];
+		for (const value of optionValues) {
+			const prefix = selected.has(value) ? "[x]" : "[ ]";
+			displayOptions.push(`${prefix} ${value}`);
+		}
+
+		const choice = await ctx.ui.select(params.question, displayOptions);
+
+		if (choice === null || choice === "✗ Cancel") {
+			return {
+				question: params.question,
+				type: "multiselect",
+				options: rawOptions,
+				answer: null,
+				cancelled: true,
+			};
+		}
+
+		if (choice === "✓ Done") {
+			return {
+				question: params.question,
+				type: "multiselect",
+				options: rawOptions,
+				answer: Array.from(selected),
+				cancelled: false,
+			};
+		}
+
+		if (choice === CUSTOM_LABEL) {
+			const text = await ctx.ui.input("Enter a custom value to add:");
+			if (text && !optionValues.includes(text)) {
+				optionValues.push(text);
+				selected.add(text);
+			} else if (text) {
+				selected.add(text);
+			}
+			continue;
+		}
+
+		// Toggle a regular option.
+		const value = choice.replace(/^\[[x ]\] /, "");
+		if (selected.has(value)) {
+			selected.delete(value);
+		} else {
+			selected.add(value);
+		}
+	}
 }
 
 async function askInTui(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
@@ -180,47 +339,16 @@ async function askInTui(params: AskParams, ctx: ExtensionContext): Promise<AskDe
 	}
 
 	const type = params.type ?? "text";
-	const signal = makeSignal(params.timeout);
-
 	switch (type) {
-		case "confirm": {
-			const ok = await ctx.ui.confirm(question, undefined, signal ? { signal } : undefined);
-			return {
-				question,
-				type,
-				options: undefined,
-				answer: ok === null ? null : ok,
-				cancelled: ok === null,
-			};
-		}
-
-		case "select": {
-			const options = params.options ?? [];
-			if (options.length === 0) {
-				ctx.ui.notify("askuser: select requires options", "error");
-				return { question, type, options, answer: null, cancelled: true };
-			}
-			const choice = await ctx.ui.select(question, options);
-			return {
-				question,
-				type,
-				options,
-				answer: choice ?? null,
-				cancelled: choice === null,
-			};
-		}
-
+		case "confirm":
+			return askConfirm(params, ctx);
+		case "select":
+			return askSelect(params, ctx);
+		case "multiselect":
+			return askMultiselect(params, ctx);
 		case "text":
-		default: {
-			const text = await ctx.ui.input(question, params.default ?? "", signal ? { signal } : undefined);
-			return {
-				question,
-				type,
-				options: undefined,
-				answer: text ?? null,
-				cancelled: text === null,
-			};
-		}
+		default:
+			return askText(params, ctx);
 	}
 }
 
@@ -234,6 +362,10 @@ function renderAnswer(details: AskDetails): string {
 	if (typeof details.answer === "boolean") {
 		return details.answer ? "User answered yes." : "User answered no.";
 	}
+	if (Array.isArray(details.answer)) {
+		if (details.answer.length === 0) return "User selected nothing.";
+		return `User selected: ${details.answer.join(", ")}`;
+	}
 	return `User answered: ${details.answer}`;
 }
 
@@ -245,16 +377,22 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 	const AskParamsSchema = Type.Object({
 		question: Type.String({ description: "The question to ask the user" }),
 		type: Type.Optional(
-			StringEnum(["text", "confirm", "select"] as const, {
-				description: "Input type: text (default), confirm, or select",
+			StringEnum(["text", "confirm", "select", "multiselect"] as const, {
+				description: "Input type: text (default), confirm, select, or multiselect",
 			}),
 		),
 		options: Type.Optional(
-			Type.Array(Type.String(), { description: "Required when type is select" }),
+			Type.Array(Type.String(), { description: "Required when type is select or multiselect" }),
 		),
 		default: Type.Optional(Type.String({ description: "Default value for text input" })),
 		timeout: Type.Optional(
 			Type.Number({ description: "Optional timeout in milliseconds before auto-cancelling" }),
+		),
+		allow_custom: Type.Optional(
+			Type.Boolean({
+				description:
+					"For confirm: also offer an 'Other (custom)' explain option. For select/multiselect it is always enabled.",
+			}),
 		),
 	});
 
@@ -266,8 +404,9 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 		promptSnippet: "Prompt the user for input when the next step depends on a choice or missing detail.",
 		promptGuidelines: [
 			"Use askuser only when the task cannot proceed without user input.",
-			"For askuser with type 'select', always provide the options array.",
+			"For askuser with type 'select' or 'multiselect', always provide the options array.",
 			"Keep the question concise but include enough context for the user to answer.",
+			"Users can always choose 'Other (custom)' for select/multiselect to type their own answer.",
 		],
 		parameters: AskParamsSchema,
 		executionMode: "sequential",
@@ -292,15 +431,21 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 				};
 			}
 
-			// Validate select input up front.
-			if (params.type === "select" && (!params.options || params.options.length === 0)) {
+			// Validate select/multiselect input up front.
+			if (
+				(params.type === "select" || params.type === "multiselect") &&
+				(!params.options || params.options.length === 0)
+			) {
 				return {
 					content: [
-						{ type: "text", text: "askuser error: type 'select' requires an options array." },
+						{
+							type: "text",
+							text: `askuser error: type '${params.type}' requires an options array.`,
+						},
 					],
 					details: {
 						question: params.question,
-						type: "select",
+						type: params.type,
 						options: params.options,
 						answer: null,
 						cancelled: true,
@@ -308,9 +453,9 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 				};
 			}
 
-			// Tell Herdr (if available) that this pane is blocked waiting for input.
+			// Tell Herdr that this pane is blocked waiting for input.
 			if (isHerdrEnv()) {
-				await herdrReportAgent("blocked", "Waiting for user answer");
+				setHerdrBlocked(pi, true, "askuser");
 				await herdrNotify("Pi needs input", params.question);
 			}
 
@@ -318,7 +463,7 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 
 			// Restore agent state now that the prompt is done.
 			if (isHerdrEnv()) {
-				await herdrReportAgent(details.cancelled ? "idle" : "working");
+				setHerdrBlocked(pi, false);
 			}
 
 			return {
@@ -327,5 +472,4 @@ export default function askuserHerdr(pi: ExtensionAPI) {
 			};
 		},
 	});
-
 }

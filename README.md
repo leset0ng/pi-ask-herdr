@@ -9,7 +9,12 @@ A Pi extension that adds an `askuser` tool, with optional integration with
   - free-form text (`type: "text"`)
   - yes/no confirmation (`type: "confirm"`)
   - single choice from a list (`type: "select"`)
+  - multiple choices from a list (`type: "multiselect"`)
 - Waits for the answer and returns it to the agent.
+- For `select` and `multiselect`, an **"Other (custom)"** option is always
+  available so the user can type their own answer.
+- For `confirm`, you can enable the same custom option with
+  `"allow_custom": true`.
 - No extra slash command is registered — only the `askuser` tool.
 - When Pi runs inside a Herdr pane, it:
   - reports the pane state as `blocked` while waiting
@@ -49,10 +54,11 @@ pi -e ~/.pi/agent/extensions/pi-ask-herdr/index.ts
 | Name      | Type     | Required | Description                                      |
 |-----------|----------|----------|--------------------------------------------------|
 | question  | string   | yes      | The question to display                          |
-| type      | string   | no       | `"text"`, `"confirm"`, or `"select"` (default: text) |
-| options   | string[] | no       | Required when `type` is `select`                 |
-| default   | string   | no       | Prefilled value for text input                   |
-| timeout   | number   | no       | Auto-cancel after N milliseconds                 |
+| type         | string   | no       | `"text"`, `"confirm"`, `"select"`, `"multiselect"` (default: text) |
+| options      | string[] | no       | Required when `type` is `select` or `multiselect`            |
+| default      | string   | no       | Prefilled value for text input                               |
+| timeout      | number   | no       | Auto-cancel after N milliseconds                             |
+| allow_custom | boolean  | no       | For `confirm`: also offer "Other (custom)"                   |
 
 ## Herdr integration
 

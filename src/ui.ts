@@ -14,6 +14,20 @@ function makeSignal(timeout?: number): AbortSignal | undefined {
 	return controller.signal;
 }
 
+function cancelledDetails(
+	params: AskParams,
+	type: AskType,
+	options?: AskDetails["options"],
+): AskDetails {
+	return {
+		question: params.question,
+		type,
+		options,
+		answer: null,
+		cancelled: true,
+	};
+}
+
 async function askText(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
 	const signal = makeSignal(params.timeout);
 	const text = await ctx.ui.input(params.question, params.default ?? "", signal ? { signal } : undefined);
@@ -22,57 +36,49 @@ async function askText(params: AskParams, ctx: ExtensionContext): Promise<AskDet
 		type: "text",
 		options: undefined,
 		answer: text ?? null,
-		cancelled: text === null,
+		cancelled: text === undefined,
 	};
 }
 
 async function askConfirm(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
 	const signal = makeSignal(params.timeout);
-	const allowCustom = params.allow_custom ?? false;
+	const options = params.allow_custom ? ["Yes", "No", CUSTOM_LABEL] : ["Yes", "No"];
 
-	if (!allowCustom) {
-		const ok = await ctx.ui.confirm(params.question, undefined, signal ? { signal } : undefined);
+	while (true) {
+		const choice = await ctx.ui.select(params.question, options, signal ? { signal } : undefined);
+
+		if (choice === undefined) {
+			return cancelledDetails(params, "confirm");
+		}
+
+		if (choice === CUSTOM_LABEL) {
+			const text = await ctx.ui.input(
+				"Please explain your choice:",
+				"",
+				signal ? { signal } : undefined,
+			);
+			if (text === undefined) {
+				if (signal?.aborted) return cancelledDetails(params, "confirm");
+				continue;
+			}
+			return {
+				question: params.question,
+				type: "confirm",
+				options: undefined,
+				answer: text,
+				cancelled: false,
+				custom: true,
+			};
+		}
+
 		return {
 			question: params.question,
 			type: "confirm",
 			options: undefined,
-			answer: ok === null ? null : ok,
-			cancelled: ok === null,
+			answer: choice === "Yes",
+			cancelled: false,
 		};
 	}
-
-	const options = ["Yes", "No", CUSTOM_LABEL];
-	const choice = await ctx.ui.select(params.question, options, signal ? { signal } : undefined);
-
-	if (choice === null) {
-		return {
-			question: params.question,
-			type: "confirm",
-			options: undefined,
-			answer: null,
-			cancelled: true,
-		};
-	}
-
-	if (choice === CUSTOM_LABEL) {
-		const text = await ctx.ui.input("Please explain your choice:");
-		return {
-			question: params.question,
-			type: "confirm",
-			options: undefined,
-			answer: text ?? null,
-			cancelled: text === null,
-			custom: true,
-		};
-	}
-
-	return {
-		question: params.question,
-		type: "confirm",
-		options: undefined,
-		answer: choice === "Yes",
-		cancelled: false,
-	};
 }
 
 async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
@@ -88,44 +94,54 @@ async function askSelect(params: AskParams, ctx: ExtensionContext): Promise<AskD
 		};
 	}
 
+	const signal = makeSignal(params.timeout);
 	const normalized = normalizeOptions(rawOptions);
 	const items = normalized.map((o) => ({
 		...o,
 		display: formatOptionDisplay(o, ctx.ui.theme),
 	}));
 	const displayOptions = [...items.map((o) => o.display), CUSTOM_LABEL];
-	const choice = await ctx.ui.select(params.question, displayOptions);
 
-	if (choice === null) {
+	while (true) {
+		const choice = await ctx.ui.select(
+			params.question,
+			displayOptions,
+			signal ? { signal } : undefined,
+		);
+
+		if (choice === undefined) {
+			return cancelledDetails(params, "select", rawOptions);
+		}
+
+		if (choice === CUSTOM_LABEL) {
+			const text = await ctx.ui.input(
+				"Enter your custom answer:",
+				"",
+				signal ? { signal } : undefined,
+			);
+			if (text === undefined) {
+				if (signal?.aborted) return cancelledDetails(params, "select", rawOptions);
+				continue;
+			}
+			return {
+				question: params.question,
+				type: "select",
+				options: rawOptions,
+				answer: text,
+				cancelled: false,
+				custom: true,
+			};
+		}
+
+		const picked = items.find((o) => o.display === choice);
 		return {
 			question: params.question,
 			type: "select",
 			options: rawOptions,
-			answer: null,
-			cancelled: true,
+			answer: picked?.value ?? choice,
+			cancelled: false,
 		};
 	}
-
-	if (choice === CUSTOM_LABEL) {
-		const text = await ctx.ui.input("Enter your custom answer:");
-		return {
-			question: params.question,
-			type: "select",
-			options: rawOptions,
-			answer: text ?? null,
-			cancelled: text === null,
-			custom: true,
-		};
-	}
-
-	const picked = items.find((o) => o.display === choice);
-	return {
-		question: params.question,
-		type: "select",
-		options: rawOptions,
-		answer: picked?.value ?? choice,
-		cancelled: false,
-	};
 }
 
 async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise<AskDetails> {
@@ -141,6 +157,7 @@ async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise
 		};
 	}
 
+	const signal = makeSignal(params.timeout);
 	const normalized = normalizeOptions(rawOptions);
 	let optionItems: Array<OptionItem & { display: string }> = normalized.map((o) => ({
 		...o,
@@ -155,16 +172,14 @@ async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise
 			displayOptions.push(`${prefix} ${item.display}`);
 		}
 
-		const choice = await ctx.ui.select(params.question, displayOptions);
+		const choice = await ctx.ui.select(
+			params.question,
+			displayOptions,
+			signal ? { signal } : undefined,
+		);
 
-		if (choice === null || choice === "✗ Cancel") {
-			return {
-				question: params.question,
-				type: "multiselect",
-				options: rawOptions,
-				answer: null,
-				cancelled: true,
-			};
+		if (choice === undefined || choice === "✗ Cancel") {
+			return cancelledDetails(params, "multiselect", rawOptions);
 		}
 
 		if (choice === "✓ Done") {
@@ -178,7 +193,14 @@ async function askMultiselect(params: AskParams, ctx: ExtensionContext): Promise
 		}
 
 		if (choice === CUSTOM_LABEL) {
-			const text = await ctx.ui.input("Enter a custom value to add:");
+			const text = await ctx.ui.input(
+				"Enter a custom value to add:",
+				"",
+				signal ? { signal } : undefined,
+			);
+			if (text === undefined && signal?.aborted) {
+				return cancelledDetails(params, "multiselect", rawOptions);
+			}
 			if (text) {
 				if (!optionItems.some((i) => i.value === text)) {
 					optionItems.push({

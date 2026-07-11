@@ -2,8 +2,9 @@
  * Tool registration for ask_user.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isHerdrEnv, herdrNotify, setHerdrBlocked } from "./herdr.ts";
 import { askInTui, renderAnswer } from "./ui.ts";
@@ -16,7 +17,9 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 	});
 
 	const AskParamsSchema = Type.Object({
-		question: Type.String({ description: "The question to ask the user" }),
+		question: Type.String({
+			description: "The exact question shown to the user; include the context needed to answer",
+		}),
 		type: Type.Optional(
 			StringEnum(["text", "confirm", "select", "multiselect"] as const, {
 				description: "Input type: text (default), confirm, select, or multiselect",
@@ -43,14 +46,17 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 		name: "ask_user",
 		label: "Ask User",
 		description:
-			"Ask the user a question and wait for an answer. Use when you need user input to continue.",
-		promptSnippet: "Prompt the user for input when the next step depends on a choice or missing detail.",
+			"Ask the user an interactive question and wait for the answer. When you need a user response before continuing, you MUST call ask_user instead of asking in assistant text.",
+		promptSnippet:
+			"Request required user input in an interactive prompt; use ask_user instead of asking in chat.",
 		promptGuidelines: [
-			"Use ask_user only when the task cannot proceed without user input.",
+			"Whenever you need the user to answer a question before you can continue, you MUST call ask_user; do not ask the question in assistant prose.",
+			"Do not end a response with a question for the user when ask_user is available. Call ask_user and wait for its result.",
+			"Use ask_user only for missing information, choices, or confirmation that cannot be inferred safely from the available context.",
 			"For ask_user with type 'select' or 'multiselect', always provide the options array.",
-			"Keep the question concise but include enough context for the user to answer.",
+			"Keep the ask_user question concise, but include enough decision context for the user to answer.",
 			"Users can always choose 'Other (custom)' for select/multiselect to type their own answer.",
-			"Use { label, description } objects for options when the user needs extra context to decide.",
+			"Use { label, description } objects for ask_user options when the user needs extra context to decide.",
 		],
 		parameters: AskParamsSchema,
 		executionMode: "sequential",
@@ -114,6 +120,15 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 				content: [{ type: "text", text: renderAnswer(details) }],
 				details,
 			};
+		},
+
+		renderCall(args, theme, _context) {
+			const question = typeof args.question === "string" ? args.question.trim() : "";
+			let text = theme.fg("toolTitle", theme.bold("Ask User"));
+			if (question) {
+				text += ` ${theme.fg("muted", question)}`;
+			}
+			return new Text(text, 0, 0);
 		},
 	});
 }

@@ -9,13 +9,19 @@ export interface OptionObject {
 	description?: string;
 }
 
-export interface AskParams {
+/** A single question inside an ask_user batch. */
+export interface AskQuestion {
 	question: string;
 	type?: AskType;
 	options?: (string | OptionObject)[];
 	default?: string;
-	timeout?: number;
 	allow_custom?: boolean;
+}
+
+export interface AskParams {
+	questions: AskQuestion[];
+	/** Total timeout in milliseconds for the whole batch. */
+	timeout?: number;
 }
 
 export interface OptionItem {
@@ -24,6 +30,7 @@ export interface OptionItem {
 	description?: string;
 }
 
+/** Structured result for one answered question. */
 export interface AskDetails {
 	question: string;
 	type: AskType;
@@ -31,6 +38,12 @@ export interface AskDetails {
 	answer: string | boolean | string[] | null;
 	cancelled: boolean;
 	custom?: boolean;
+}
+
+/** Structured result for the whole ask_user call. */
+export interface AskBatchDetails {
+	answers: AskDetails[];
+	cancelled: boolean;
 }
 
 // Sentinel value used internally for the "Other (custom)" menu item.

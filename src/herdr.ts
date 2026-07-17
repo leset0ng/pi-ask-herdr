@@ -2,9 +2,11 @@
  * Herdr integration helpers.
  *
  * - Detects whether Pi is running inside a Herdr pane.
- * - Sends toast notifications via the Herdr Unix socket.
  * - Reports blocked/working state through the official Herdr Pi integration
- *   event bus (`herdr:blocked`).
+ *   event bus (`herdr:blocked`). Herdr itself shows a notification for
+ *   blocked panes, so no extra notification is sent from here.
+ * - Reports ask_user progress as a pane metadata token (`ask`) that Herdr can
+ *   render in sidebar agent rows via a `$ask` row slot.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -14,8 +16,12 @@ export function isHerdrEnv(): boolean {
 	return process.env.HERDR_ENV === "1" && !!process.env.HERDR_SOCKET_PATH && !!process.env.HERDR_PANE_ID;
 }
 
-function herdrSocketPath(): string | undefined {
-	return process.env.HERDR_SOCKET_PATH;
+export function setHerdrBlocked(pi: ExtensionAPI, active: boolean, label?: string) {
+	try {
+		pi.events.emit("herdr:blocked", { active, label });
+	} catch (err) {
+		console.error("[pi-ask-herdr] failed to emit herdr:blocked:", err);
+	}
 }
 
 /**
@@ -23,7 +29,7 @@ function herdrSocketPath(): string | undefined {
  * the matching result. Herdr speaks newline-delimited JSON.
  */
 function herdrRequest<T>(method: string, params: object): Promise<T | undefined> {
-	const socketPath = herdrSocketPath();
+	const socketPath = process.env.HERDR_SOCKET_PATH;
 	if (!socketPath) return Promise.resolve(undefined);
 
 	const id = `askuser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -77,22 +83,36 @@ function herdrRequest<T>(method: string, params: object): Promise<T | undefined>
 	});
 }
 
-export async function herdrNotify(title: string, body: string) {
+const METADATA_SOURCE = "pi-ask-herdr";
+const METADATA_TOKEN = "ask";
+
+/**
+ * Show the pending question count in the Herdr sidebar while the pane is
+ * blocked. Sidebar rows are narrow, so the label is just `❓N`.
+ * Failures are logged but never break prompting.
+ */
+export async function reportAskMetadata(questionTexts: string[]): Promise<void> {
+	const label = `❓${questionTexts.length}`;
 	try {
-		await herdrRequest<{ type: string; shown: boolean; reason?: string }>("notification.show", {
-			title,
-			body,
-			sound: "request",
+		await herdrRequest("pane.report_metadata", {
+			pane_id: process.env.HERDR_PANE_ID,
+			source: METADATA_SOURCE,
+			tokens: { [METADATA_TOKEN]: label },
 		});
 	} catch (err) {
-		console.error("[pi-ask-herdr] notification.show failed:", err);
+		console.error("[pi-ask-herdr] pane.report_metadata failed:", err);
 	}
 }
 
-export function setHerdrBlocked(pi: ExtensionAPI, active: boolean, label?: string) {
+/** Clear the sidebar token once the prompt is done. */
+export async function clearAskMetadata(): Promise<void> {
 	try {
-		pi.events.emit("herdr:blocked", { active, label });
+		await herdrRequest("pane.report_metadata", {
+			pane_id: process.env.HERDR_PANE_ID,
+			source: METADATA_SOURCE,
+			tokens: { [METADATA_TOKEN]: null },
+		});
 	} catch (err) {
-		console.error("[pi-ask-herdr] failed to emit herdr:blocked:", err);
+		console.error("[pi-ask-herdr] failed to clear pane metadata:", err);
 	}
 }

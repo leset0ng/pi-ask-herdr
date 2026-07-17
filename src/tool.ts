@@ -6,9 +6,9 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { isHerdrEnv, herdrNotify, setHerdrBlocked } from "./herdr.ts";
-import { askInTui, renderAnswer } from "./ui.ts";
-import type { AskDetails } from "./types.ts";
+import { clearAskMetadata, isHerdrEnv, reportAskMetadata, setHerdrBlocked } from "./herdr.ts";
+import { askBatchInTui, renderBatchAnswer } from "./ui.ts";
+import type { AskBatchDetails } from "./types.ts";
 
 export function registerAskuserTool(pi: ExtensionAPI) {
 	const OptionSchema = Type.Object({
@@ -16,7 +16,7 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 		description: Type.Optional(Type.String({ description: "Optional longer description shown in the menu" })),
 	});
 
-	const AskParamsSchema = Type.Object({
+	const QuestionSchema = Type.Object({
 		question: Type.String({
 			description: "The exact question shown to the user; include the context needed to answer",
 		}),
@@ -31,9 +31,6 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 			}),
 		),
 		default: Type.Optional(Type.String({ description: "Default value for text input" })),
-		timeout: Type.Optional(
-			Type.Number({ description: "Optional timeout in milliseconds before auto-cancelling" }),
-		),
 		allow_custom: Type.Optional(
 			Type.Boolean({
 				description:
@@ -42,26 +39,40 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 		),
 	});
 
+	const AskParamsSchema = Type.Object({
+		questions: Type.Array(QuestionSchema, {
+			minItems: 1,
+			description:
+				"Questions to ask, in order. The user answers them one by one and can step back with Esc. Use a single-element array for one question.",
+		}),
+		timeout: Type.Optional(
+			Type.Number({ description: "Total timeout in milliseconds for the whole batch before auto-cancelling" }),
+		),
+	});
+
 	pi.registerTool({
 		name: "ask_user",
 		label: "Ask User",
 		description:
-			"Ask the user an interactive question and wait for the answer. When you need a user response before continuing, you MUST call ask_user instead of asking in assistant text.",
+			"Ask the user one or more interactive questions and wait for the answers. When you need a user response before continuing, you MUST call ask_user instead of asking in assistant text.",
 		promptSnippet:
 			"Request required user input in an interactive prompt; use ask_user instead of asking in chat.",
 		promptGuidelines: [
 			"Whenever you need the user to answer a question before you can continue, you MUST call ask_user; do not ask the question in assistant prose.",
 			"Do not end a response with a question for the user when ask_user is available. Call ask_user and wait for its result.",
 			"Use ask_user only for missing information, choices, or confirmation that cannot be inferred safely from the available context.",
-			"For ask_user with type 'select' or 'multiselect', always provide the options array.",
-			"Keep the ask_user question concise, but include enough decision context for the user to answer.",
+			"Pass a single question as a one-element questions array; batch multiple related questions into one call so the user can answer them in sequence.",
+			"For questions with type 'select' or 'multiselect', always provide the options array.",
+			"Keep each question concise, but include enough decision context for the user to answer.",
 			"Users can always choose 'Other (custom)' for select/multiselect to type their own answer.",
 			"Use { label, description } objects for ask_user options when the user needs extra context to decide.",
 		],
 		parameters: AskParamsSchema,
 		executionMode: "sequential",
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx: ExtensionContext) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx: ExtensionContext) {
+			const cancelledBatch = (): AskBatchDetails => ({ answers: [], cancelled: true });
+
 			// Guard against non-interactive invocations.
 			if (ctx.mode !== "tui") {
 				return {
@@ -71,62 +82,58 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 							text: "ask_user can only be used in interactive TUI mode.",
 						},
 					],
-					details: {
-						question: params.question,
-						type: params.type ?? "text",
-						options: params.options,
-						answer: null,
-						cancelled: true,
-					} satisfies AskDetails,
+					details: cancelledBatch(),
 				};
 			}
 
-			// Validate select/multiselect input up front.
-			if (
-				(params.type === "select" || params.type === "multiselect") &&
-				(!params.options || params.options.length === 0)
-			) {
+			// Validate all questions up front so the wizard never starts half-broken.
+			const problems: string[] = [];
+			params.questions.forEach((q, i) => {
+				if (!q.question || !q.question.trim()) {
+					problems.push(`questions[${i}]: question text is empty`);
+				}
+				if ((q.type === "select" || q.type === "multiselect") && (!q.options || q.options.length === 0)) {
+					problems.push(`questions[${i}]: type '${q.type}' requires a non-empty options array`);
+				}
+			});
+			if (problems.length > 0) {
 				return {
-					content: [
-						{
-							type: "text",
-							text: `ask_user error: type '${params.type}' requires an options array.`,
-						},
-					],
-					details: {
-						question: params.question,
-						type: params.type,
-						options: params.options,
-						answer: null,
-						cancelled: true,
-					} satisfies AskDetails,
+					content: [{ type: "text", text: `ask_user error:\n${problems.join("\n")}` }],
+					details: cancelledBatch(),
 				};
 			}
 
-			// Tell Herdr that this pane is blocked waiting for input.
+			// Tell Herdr that this pane is blocked waiting for input, and
+			// surface the pending question(s) in the sidebar.
 			if (isHerdrEnv()) {
 				setHerdrBlocked(pi, true, "ask_user");
-				await herdrNotify("Pi needs input", params.question);
+				await reportAskMetadata(params.questions.map((q) => q.question.trim()));
 			}
 
-			const details = await askInTui(params, ctx);
-
-			// Restore agent state now that the prompt is done.
-			if (isHerdrEnv()) {
-				setHerdrBlocked(pi, false);
+			let details: AskBatchDetails;
+			try {
+				details = await askBatchInTui(params, ctx, signal ?? undefined);
+			} finally {
+				// Restore agent state and clear the sidebar token.
+				if (isHerdrEnv()) {
+					setHerdrBlocked(pi, false);
+					await clearAskMetadata();
+				}
 			}
 
 			return {
-				content: [{ type: "text", text: renderAnswer(details) }],
+				content: [{ type: "text", text: renderBatchAnswer(details) }],
 				details,
 			};
 		},
 
 		renderCall(args, theme, _context) {
-			const question = typeof args.question === "string" ? args.question.trim() : "";
-			let text = theme.fg("toolTitle", theme.bold("Ask User"));
-			if (question) {
-				text += ` ${theme.fg("muted", question)}`;
+			const questions = Array.isArray(args.questions) ? args.questions : [];
+			const count = questions.length;
+			const first = count > 0 && typeof questions[0]?.question === "string" ? questions[0].question.trim() : "";
+			let text = theme.fg("toolTitle", theme.bold(count > 1 ? `Ask User (${count} questions)` : "Ask User"));
+			if (first) {
+				text += ` ${theme.fg("muted", first)}`;
 			}
 			return new Text(text, 0, 0);
 		},

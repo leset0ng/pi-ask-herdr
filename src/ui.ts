@@ -7,52 +7,33 @@
  * - Ctrl+C cancels the whole batch immediately, discarding all answers
  */
 
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import {
-	Input,
-	matchesKey,
-	type SelectItem,
-	SelectList,
-	type SelectListTheme,
-	type TUI,
-	truncateToWidth,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import { Input, matchesKey, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { normalizeOptions } from "./options.ts";
 import type { AskBatchDetails, AskDetails, AskParams, AskType, OptionItem } from "./types.ts";
 import { CUSTOM_LABEL, CUSTOM_SENTINEL } from "./types.ts";
 
-function selectTheme(theme: Theme): SelectListTheme {
-	return {
-		selectedPrefix: (t) => theme.fg("accent", t),
-		selectedText: (t) => theme.fg("accent", t),
-		description: (t) => theme.fg("muted", t),
-		scrollInfo: (t) => theme.fg("dim", t),
-		noMatch: (t) => theme.fg("warning", t),
-	};
+/** Wrap text while keeping the first-line prefix and aligning continuations. */
+function wrapWithPrefix(prefix: string, text: string, width: number): string[] {
+	const renderWidth = Math.max(1, width);
+	const prefixWidth = visibleWidth(prefix);
+	const contentWidth = renderWidth - prefixWidth;
+
+	// A CJK grapheme needs two columns. On extremely narrow layouts, put a
+	// meaningful prefix on its own line and give the content the full width.
+	if (contentWidth < 2) {
+		const compactPrefix = prefix.trimEnd();
+		const wrapped = wrapTextWithAnsi(text, renderWidth);
+		return compactPrefix ? [truncateToWidth(compactPrefix, renderWidth, ""), ...wrapped] : wrapped;
+	}
+
+	const wrapped = wrapTextWithAnsi(text, contentWidth);
+	const continuationPrefix = " ".repeat(prefixWidth);
+	return wrapped.map((line, index) => `${index === 0 ? prefix : continuationPrefix}${line}`);
 }
 
-/** Greedy word wrap that respects ANSI escape sequences. */
-function wrapText(text: string, width: number): string[] {
-	const out: string[] = [];
-	for (const para of text.split("\n")) {
-		if (visibleWidth(para) <= width) {
-			out.push(para);
-			continue;
-		}
-		let line = "";
-		for (const word of para.split(" ")) {
-			const candidate = line ? `${line} ${word}` : word;
-			if (visibleWidth(candidate) <= width) {
-				line = candidate;
-			} else {
-				if (line) out.push(line);
-				line = word;
-			}
-		}
-		if (line) out.push(line);
-	}
-	return out.length > 0 ? out : [""];
+interface OptionListItem extends OptionItem {
+	isCustom?: boolean;
 }
 
 interface QuestionState {
@@ -63,42 +44,46 @@ interface QuestionState {
 	items: OptionItem[];
 	answer: string | boolean | string[] | undefined;
 	custom?: boolean;
-	/** Live selection set for multiselect; shared with the CheckboxList. */
+	/** Live selection set for multiselect; shared with the OptionList. */
 	selected: Set<string>;
 }
 
 /**
- * Checkbox list for multiselect questions.
- * Space toggles the focused row, Enter submits (or opens the custom input
- * when the custom row is focused), Esc goes back.
+ * Shared wrapped option list for select, confirm, and multiselect questions.
+ * Navigation remains item-based even when one item occupies several lines.
  */
-class CheckboxList {
+class OptionList {
 	private cursor = 0;
-	private maxVisible: number;
+	private maxVisibleItems: number;
 
-	onSubmit?: () => void;
+	onSelect?: (item: OptionListItem) => void;
+	onDone?: () => void;
 	onBack?: () => void;
 	onCustom?: () => void;
 
 	constructor(
-		private items: OptionItem[],
-		private selected: Set<string>,
+		private items: OptionListItem[],
+		private mode: "select" | "multiselect",
 		private theme: Theme,
+		private keybindings: KeybindingsManager,
+		private selected: Set<string> = new Set<string>(),
+		maxVisibleItems = 10,
+		private maxVisibleLines = 12,
 	) {
-		this.maxVisible = Math.min(this.rowCount(), 10);
+		this.maxVisibleItems = Math.max(1, Math.min(items.length, maxVisibleItems));
 	}
 
-	private rowCount(): number {
-		return this.items.length + 1; // +1 for the custom row
+	setSelectedIndex(index: number): void {
+		this.cursor = Math.max(0, Math.min(index, this.items.length - 1));
 	}
 
-	private onCustomRow(): boolean {
-		return this.cursor === this.items.length;
+	private currentItem(): OptionListItem | undefined {
+		return this.items[this.cursor];
 	}
 
-	private toggle() {
-		const item = this.items[this.cursor];
-		if (!item) return;
+	private toggle(): void {
+		const item = this.currentItem();
+		if (!item || item.isCustom) return;
 		if (this.selected.has(item.value)) {
 			this.selected.delete(item.value);
 		} else {
@@ -107,45 +92,99 @@ class CheckboxList {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "up")) {
-			this.cursor = this.cursor === 0 ? this.rowCount() - 1 : this.cursor - 1;
-		} else if (matchesKey(data, "down")) {
-			this.cursor = this.cursor === this.rowCount() - 1 ? 0 : this.cursor + 1;
-		} else if (matchesKey(data, "space")) {
-			if (this.onCustomRow()) this.onCustom?.();
+		if (matchesKey(data, "up") || this.keybindings.matches(data, "tui.select.up")) {
+			this.cursor = this.cursor === 0 ? this.items.length - 1 : this.cursor - 1;
+		} else if (matchesKey(data, "down") || this.keybindings.matches(data, "tui.select.down")) {
+			this.cursor = this.cursor === this.items.length - 1 ? 0 : this.cursor + 1;
+		} else if (matchesKey(data, "space") && this.mode === "multiselect") {
+			if (this.currentItem()?.isCustom) this.onCustom?.();
 			else this.toggle();
-		} else if (matchesKey(data, "enter")) {
-			if (this.onCustomRow()) this.onCustom?.();
-			else this.onSubmit?.();
-		} else if (matchesKey(data, "escape")) {
+		} else if (matchesKey(data, "enter") || this.keybindings.matches(data, "tui.select.confirm")) {
+			const item = this.currentItem();
+			if (!item) return;
+			if (item.isCustom) this.onCustom?.();
+			else if (this.mode === "multiselect") this.onDone?.();
+			else this.onSelect?.(item);
+		} else if (matchesKey(data, "escape") || this.keybindings.matches(data, "tui.select.cancel")) {
 			this.onBack?.();
 		}
 	}
 
+	private renderItem(item: OptionListItem, index: number, width: number): string[] {
+		const rows: string[] = [];
+		const isCursor = index === this.cursor;
+		const pointer = isCursor ? this.theme.fg("accent", "›") : " ";
+		const marker =
+			this.mode === "multiselect"
+				? item.isCustom
+					? "   "
+					: this.selected.has(item.value)
+						? "[x]"
+						: "[ ]"
+				: "";
+		const prefix = this.mode === "multiselect" ? `${pointer} ${marker} ` : `${pointer} `;
+		const label = item.isCustom
+			? this.theme.fg(isCursor ? "accent" : "dim", item.label)
+			: isCursor
+				? this.theme.fg("accent", item.label)
+				: item.label;
+		rows.push(...wrapWithPrefix(prefix, label, width));
+
+		if (item.description) {
+			const descriptionPrefix = " ".repeat(visibleWidth(prefix));
+			rows.push(...wrapWithPrefix(descriptionPrefix, this.theme.fg("muted", item.description), width));
+		}
+		return rows;
+	}
+
+	private visibleRange(renderedItems: string[][]): { start: number; end: number } {
+		if (renderedItems.length === 0) return { start: 0, end: 0 };
+
+		let start = this.cursor;
+		let end = this.cursor + 1;
+		let visibleLines = renderedItems[this.cursor]?.length ?? 0;
+
+		while (end - start < this.maxVisibleItems) {
+			const before = start - 1;
+			const after = end;
+			const beforeCount = this.cursor - start;
+			const afterCount = end - this.cursor - 1;
+			const candidates = beforeCount <= afterCount ? [before, after] : [after, before];
+			let added = false;
+
+			for (const candidate of candidates) {
+				if (candidate < 0 || candidate >= renderedItems.length || (candidate >= start && candidate < end)) continue;
+				const candidateLines = renderedItems[candidate]?.length ?? 0;
+				if (visibleLines + candidateLines > this.maxVisibleLines) continue;
+				if (candidate === start - 1) start--;
+				else if (candidate === end) end++;
+				else continue;
+				visibleLines += candidateLines;
+				added = true;
+				break;
+			}
+			if (!added) break;
+		}
+		return { start, end };
+	}
+
 	render(width: number): string[] {
 		const rows: string[] = [];
-		const total = this.rowCount();
-		const start = Math.max(0, Math.min(this.cursor - Math.floor(this.maxVisible / 2), total - this.maxVisible));
-		const end = Math.min(total, start + this.maxVisible);
+		const renderedItems = this.items.map((item, index) => this.renderItem(item, index, width));
+		const { start, end } = this.visibleRange(renderedItems);
 
-		if (start > 0) rows.push(this.theme.fg("dim", `  ↑ ${start} more`));
+		if (start > 0) rows.push(this.theme.fg("dim", truncateToWidth(`  ↑ ${start} more`, width, "")));
 		for (let i = start; i < end; i++) {
-			const isCursor = i === this.cursor;
-			const pointer = isCursor ? "›" : " ";
-			if (i < this.items.length) {
-				const item = this.items[i];
-				const box = this.selected.has(item.value) ? "[x]" : "[ ]";
-				const desc = item.description ? this.theme.fg("muted", ` — ${item.description}`) : "";
-				const line = `${pointer} ${box} ${item.label}${desc}`;
-				rows.push(isCursor ? this.theme.fg("accent", line) : line);
-			} else {
-				const line = `${pointer}     ${CUSTOM_LABEL}`;
-				rows.push(isCursor ? this.theme.fg("accent", line) : this.theme.fg("dim", line));
-			}
+			rows.push(...(renderedItems[i] ?? []));
 		}
-		if (end < total) rows.push(this.theme.fg("dim", `  ↓ ${total - end} more`));
+		if (end < this.items.length) {
+			rows.push(this.theme.fg("dim", truncateToWidth(`  ↓ ${this.items.length - end} more`, width, "")));
+		}
+		return rows;
+	}
 
-		return rows.map((r) => truncateToWidth(r, width));
+	invalidate(): void {
+		// Rendered from current state each frame; nothing cached.
 	}
 }
 
@@ -157,7 +196,7 @@ class AskWizard {
 	private states: QuestionState[];
 	private index = 0;
 	private mode: "question" | "custom" = "question";
-	private child: SelectList | CheckboxList | Input;
+	private child: OptionList | Input;
 	private customInput: Input | null = null;
 	private finished = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +208,7 @@ class AskWizard {
 		private params: AskParams,
 		private tui: TUI,
 		private theme: Theme,
+		private keybindings: KeybindingsManager,
 		private doneCb: (result: AskDetails[] | null) => void,
 		private abortSignal?: AbortSignal,
 	) {
@@ -197,7 +237,7 @@ class AskWizard {
 		return this.states[this.index];
 	}
 
-	private buildChild(): SelectList | CheckboxList | Input {
+	private buildChild(): OptionList | Input {
 		const state = this.current;
 
 		switch (state.type) {
@@ -216,55 +256,53 @@ class AskWizard {
 			}
 
 			case "confirm": {
-				const items: SelectItem[] = [
+				const items: OptionListItem[] = [
 					{ value: "yes", label: "Yes" },
 					{ value: "no", label: "No" },
 				];
 				if (this.params.questions[this.index].allow_custom) {
-					items.push({ value: CUSTOM_SENTINEL, label: CUSTOM_LABEL });
+					items.push({ value: CUSTOM_SENTINEL, label: CUSTOM_LABEL, isCustom: true });
 				}
-				const list = new SelectList(items, items.length, selectTheme(this.theme));
+				const list = new OptionList(items, "select", this.theme, this.keybindings);
 				if (state.answer === true) list.setSelectedIndex(0);
 				else if (state.answer === false) list.setSelectedIndex(1);
 				list.onSelect = (item) => {
-					if (item.value === CUSTOM_SENTINEL) {
-						this.enterCustomMode();
-					} else {
-						state.answer = item.value === "yes";
-						state.custom = false;
-						this.advance();
-					}
+					state.answer = item.value === "yes";
+					state.custom = false;
+					this.advance();
 				};
-				list.onCancel = () => this.back();
+				list.onCustom = () => this.enterCustomMode();
+				list.onBack = () => this.back();
 				return list;
 			}
 
 			case "select": {
-				const items: SelectItem[] = [
+				const items: OptionListItem[] = [
 					...state.items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
-					{ value: CUSTOM_SENTINEL, label: CUSTOM_LABEL },
+					{ value: CUSTOM_SENTINEL, label: CUSTOM_LABEL, isCustom: true },
 				];
-				const list = new SelectList(items, Math.min(items.length, 10), selectTheme(this.theme));
+				const list = new OptionList(items, "select", this.theme, this.keybindings);
 				if (typeof state.answer === "string" && !state.custom) {
 					const prevIndex = state.items.findIndex((i) => i.value === state.answer);
 					if (prevIndex >= 0) list.setSelectedIndex(prevIndex);
 				}
 				list.onSelect = (item) => {
-					if (item.value === CUSTOM_SENTINEL) {
-						this.enterCustomMode();
-					} else {
-						state.answer = item.value;
-						state.custom = false;
-						this.advance();
-					}
+					state.answer = item.value;
+					state.custom = false;
+					this.advance();
 				};
-				list.onCancel = () => this.back();
+				list.onCustom = () => this.enterCustomMode();
+				list.onBack = () => this.back();
 				return list;
 			}
 
 			case "multiselect": {
-				const list = new CheckboxList(state.items, state.selected, this.theme);
-				list.onSubmit = () => {
+				const items: OptionListItem[] = [
+					...state.items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
+					{ value: CUSTOM_SENTINEL, label: CUSTOM_LABEL, isCustom: true },
+				];
+				const list = new OptionList(items, "multiselect", this.theme, this.keybindings, state.selected);
+				list.onDone = () => {
 					state.answer = Array.from(state.selected);
 					state.custom = false;
 					this.advance();
@@ -420,24 +458,23 @@ class AskWizard {
 	render(width: number): string[] {
 		const lines: string[] = [];
 		const state = this.current;
-		const bodyWidth = Math.max(1, width - 2);
+		const padding = width >= 3 ? " " : "";
+		const bodyWidth = Math.max(1, width - visibleWidth(padding));
 
 		lines.push(this.borderLine(width));
 		if (this.states.length > 1) {
 			lines.push(this.headerLine(width));
 			lines.push("");
 		}
-		for (const ql of wrapText(state.question, bodyWidth)) {
-			lines.push(` ${this.theme.bold(ql)}`);
-		}
+		lines.push(...wrapWithPrefix(padding, this.theme.bold(state.question), width));
 		lines.push("");
 		const body = this.mode === "custom" ? this.customInput!.render(bodyWidth) : this.child.render(bodyWidth);
-		for (const bl of body) lines.push(` ${bl}`);
+		for (const bl of body) lines.push(`${padding}${bl}`);
 		lines.push("");
-		lines.push(` ${this.helpLine()}`);
+		lines.push(...wrapWithPrefix(padding, this.helpLine(), width));
 		lines.push(this.borderLine(width));
 
-		return lines.map((l) => truncateToWidth(l, width));
+		return lines.map((line) => truncateToWidth(line, width));
 	}
 
 	invalidate(): void {
@@ -451,7 +488,7 @@ export async function askBatchInTui(
 	signal?: AbortSignal,
 ): Promise<AskBatchDetails> {
 	const result = await ctx.ui.custom<AskDetails[] | null>(
-		(tui, theme, _keybindings, done) => new AskWizard(params, tui, theme, done, signal),
+		(tui, theme, keybindings, done) => new AskWizard(params, tui, theme, keybindings, done, signal),
 	);
 	if (!result) {
 		return { answers: [], cancelled: true };
@@ -459,18 +496,40 @@ export async function askBatchInTui(
 	return { answers: result, cancelled: false };
 }
 
-function formatAnswer(details: AskDetails): string {
+function singleLine(text: string): string {
+	return text.replace(/[\r\n]+/g, " ").trim();
+}
+
+function formatAnswer(details: AskDetails, annotateCustom: boolean): string {
 	if (details.answer === null) return "(no answer)";
 	if (typeof details.answer === "boolean") return details.answer ? "yes" : "no";
 	if (Array.isArray(details.answer)) {
-		return details.answer.length > 0 ? details.answer.join(", ") : "(nothing selected)";
+		return details.answer.length > 0 ? details.answer.map(singleLine).join(", ") : "(nothing selected)";
 	}
-	return details.custom ? `(custom) ${details.answer}` : details.answer;
+	const answer = singleLine(details.answer);
+	return annotateCustom && details.custom ? `(custom) ${answer}` : answer;
 }
 
+/** Compact content returned to the agent. Questions remain available in details. */
+export function renderAgentAnswer(details: AskBatchDetails): string {
+	if (details.cancelled) {
+		return "User cancelled the prompt.";
+	}
+	return details.answers.map((answer, index) => `${index + 1} -> ${formatAnswer(answer, false)}`).join("\n");
+}
+
+/** Answer-only result text used by the single-question tool UI. */
+export function renderSingleAnswer(details: AskDetails): string {
+	if (details.cancelled) return "User cancelled the prompt.";
+	return formatAnswer(details, false);
+}
+
+/** Detailed content rendered in the multi-question tool UI for the user. */
 export function renderBatchAnswer(details: AskBatchDetails): string {
 	if (details.cancelled) {
 		return "User cancelled the prompt.";
 	}
-	return details.answers.map((d, i) => `${i + 1}. ${d.question} → ${formatAnswer(d)}`).join("\n");
+	return details.answers
+		.map((answer, index) => `${index + 1}. ${answer.question} → ${formatAnswer(answer, true)}`)
+		.join("\n");
 }

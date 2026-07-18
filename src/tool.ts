@@ -7,7 +7,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { clearAskMetadata, isHerdrEnv, reportAskMetadata, setHerdrBlocked } from "./herdr.ts";
-import { askBatchInTui, renderBatchAnswer } from "./ui.ts";
+import { askBatchInTui, renderAgentAnswer, renderBatchAnswer, renderSingleAnswer } from "./ui.ts";
 import type { AskBatchDetails } from "./types.ts";
 
 export function registerAskuserTool(pi: ExtensionAPI) {
@@ -122,7 +122,7 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 			}
 
 			return {
-				content: [{ type: "text", text: renderBatchAnswer(details) }],
+				content: [{ type: "text", text: renderAgentAnswer(details) }],
 				details,
 			};
 		},
@@ -130,12 +130,31 @@ export function registerAskuserTool(pi: ExtensionAPI) {
 		renderCall(args, theme, _context) {
 			const questions = Array.isArray(args.questions) ? args.questions : [];
 			const count = questions.length;
-			const first = count > 0 && typeof questions[0]?.question === "string" ? questions[0].question.trim() : "";
 			let text = theme.fg("toolTitle", theme.bold(count > 1 ? `Ask User (${count} questions)` : "Ask User"));
-			if (first) {
-				text += ` ${theme.fg("muted", first)}`;
+			if (count === 1) {
+				const question = typeof questions[0]?.question === "string" ? questions[0].question.trim() : "";
+				if (question) text += ` ${theme.fg("muted", question)}`;
 			}
 			return new Text(text, 0, 0);
+		},
+
+		renderResult(result, _options, theme, context) {
+			const details = result.details as AskBatchDetails | undefined;
+			const textContent = result.content.find((item) => item.type === "text");
+			const rawText = textContent?.type === "text" ? textContent.text : "";
+			const questions = Array.isArray(context.args.questions) ? context.args.questions : [];
+			const isSingle = questions.length === 1;
+
+			if (!details || (details.cancelled && rawText !== "User cancelled the prompt.")) {
+				return new Text(rawText, 0, 0);
+			}
+			if (details.cancelled) {
+				return new Text(isSingle ? rawText : theme.fg("warning", "Cancelled"), 0, 0);
+			}
+			if (isSingle && details.answers[0]) {
+				return new Text(renderSingleAnswer(details.answers[0]), 0, 0);
+			}
+			return new Text(renderBatchAnswer(details), 0, 0);
 		},
 	});
 }

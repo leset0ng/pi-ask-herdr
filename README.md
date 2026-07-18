@@ -30,6 +30,10 @@ src/
   - **Esc** steps back one layer (custom input → options → previous question)
   - **Ctrl+C** cancels the whole batch immediately
   - previously answered questions keep their answers when navigating back
+  - long option labels and descriptions wrap instead of being truncated,
+    including continuous CJK text and long unbroken words
+- Agent-facing results stay compact (`1 -> answer`), while the tool result UI
+  retains each question alongside its answer for easy review.
 - For `select` and `multiselect`, an **"Other (custom)"** option is always
   available so the user can type their own answer.
 - For `confirm`, you can enable the same custom option with
@@ -53,7 +57,7 @@ Then reload Pi with `/reload`.
 ### From git
 
 ```bash
-pi install git:github.com/leset0ng/pi-ask-herdr@v0.2.0
+pi install git:github.com/leset0ng/pi-ask-herdr@v0.2.1
 ```
 
 ### Manual

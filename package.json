@@ -1,6 +1,6 @@
 {
   "name": "pi-ask-herdr",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Pi extension that adds an ask_user tool and integrates with Herdr notifications/agent state.",
   "type": "module",
   "main": "./index.ts",

@@ -84,20 +84,28 @@ function herdrRequest<T>(method: string, params: object): Promise<T | undefined>
 }
 
 const METADATA_SOURCE = "pi-ask-herdr";
-const METADATA_TOKEN = "ask";
+const METADATA_QUESTION_TOKEN = "ask";
+const METADATA_COUNT_TOKEN = "ask_count";
 
 /**
- * Show the pending question count in the Herdr sidebar while the pane is
- * blocked. Sidebar rows are narrow, so the label is just `❓N`.
- * Failures are logged but never break prompting.
+ * Keep the question and remaining count as separate Herdr tokens so Herdr can
+ * truncate the question responsively while preserving the short count token.
  */
+export function askMetadataTokens(questionTexts: string[]): Record<string, string | null> {
+	const questions = questionTexts.map((text) => text.replace(/[\r\n]+/g, " ").trim()).filter(Boolean);
+	return {
+		[METADATA_QUESTION_TOKEN]: questions.length > 0 ? `❓ ${questions[0]}` : null,
+		[METADATA_COUNT_TOKEN]: questions.length > 1 ? `+${questions.length - 1}` : null,
+	};
+}
+
+/** Report pending questions without allowing metadata failures to break prompting. */
 export async function reportAskMetadata(questionTexts: string[]): Promise<void> {
-	const label = `❓${questionTexts.length}`;
 	try {
 		await herdrRequest("pane.report_metadata", {
 			pane_id: process.env.HERDR_PANE_ID,
 			source: METADATA_SOURCE,
-			tokens: { [METADATA_TOKEN]: label },
+			tokens: askMetadataTokens(questionTexts),
 		});
 	} catch (err) {
 		console.error("[pi-ask-herdr] pane.report_metadata failed:", err);
@@ -110,7 +118,10 @@ export async function clearAskMetadata(): Promise<void> {
 		await herdrRequest("pane.report_metadata", {
 			pane_id: process.env.HERDR_PANE_ID,
 			source: METADATA_SOURCE,
-			tokens: { [METADATA_TOKEN]: null },
+			tokens: {
+				[METADATA_QUESTION_TOKEN]: null,
+				[METADATA_COUNT_TOKEN]: null,
+			},
 		});
 	} catch (err) {
 		console.error("[pi-ask-herdr] failed to clear pane metadata:", err);

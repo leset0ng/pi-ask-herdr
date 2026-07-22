@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { askMetadataTokens } from "../src/herdr.ts";
 import { askBatchInTui } from "../src/ui.ts";
 import type { AskBatchDetails, AskParams, AskType, OptionObject } from "../src/types.ts";
 
@@ -14,6 +15,22 @@ const defaultKeybindings = { matches: (_data: string, _binding: string) => false
 function compact(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "").replace(/\s/g, "");
 }
+
+test("splits the Herdr question and remaining count into responsive tokens", () => {
+	assert.deepEqual(askMetadataTokens(["First question"]), {
+		ask: "❓ First question",
+		ask_count: null,
+	});
+	assert.deepEqual(askMetadataTokens(["First question", "Second question", "Third question"]), {
+		ask: "❓ First question",
+		ask_count: "+2",
+	});
+	assert.deepEqual(askMetadataTokens(["  First\nquestion  ", "Second question"]), {
+		ask: "❓ First question",
+		ask_count: "+1",
+	});
+	assert.deepEqual(askMetadataTokens([]), { ask: null, ask_count: null });
+});
 
 async function renderWizard(
 	type: AskType,

@@ -57,7 +57,7 @@ Then reload Pi with `/reload`.
 ### From git
 
 ```bash
-pi install git:github.com/leset0ng/pi-ask-herdr@v0.2.1
+pi install git:github.com/leset0ng/pi-ask-herdr@v0.2.2
 ```
 
 ### Manual
@@ -161,19 +161,27 @@ If these are present, the extension:
 - emits `herdr:blocked` with `active: true` before prompting (the official
   Herdr Pi integration turns this into a `blocked` pane state, which Herdr
   surfaces as a notification)
-- reports the pending question count as a short pane metadata token (`❓N`)
-  while waiting
+- reports the first pending question and remaining count as separate pane
+  metadata tokens while waiting, allowing Herdr to truncate the question as
+  the sidebar is resized while preserving `+N`
 - emits `herdr:blocked` with `active: false` and clears the token after the
   user answers
 
 ### Sidebar display
 
-To render the token in Herdr's sidebar, add a `$ask` slot to the agent rows
-in `~/.config/herdr/config.toml`, then run `herdr server reload-config`:
+For one question the row shows the question text itself. For multiple questions,
+Herdr renders the short count as a separate token, for example
+`❓ Which database should we use? · +2`. Keeping `$ask_count` separate ensures
+it remains visible while `$ask` is truncated responsively as the sidebar is
+resized.
+
+To render the tokens in Herdr's sidebar, add `$ask` and `$ask_count` to the same
+agent row in `~/.config/herdr/config.toml`, then run
+`herdr server reload-config`:
 
 ```toml
 [ui.sidebar.agents]
-rows = [["state_icon", "workspace", "tab"], ["agent", "$ask"]]
+rows = [["state_icon", "workspace", "tab"], ["agent", "$ask", "$ask_count"]]
 ```
 
 Without this config the token is simply not displayed; everything else works
